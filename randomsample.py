@@ -26,7 +26,7 @@ parser.add_argument("-e", "--endtimestamp", type=int, help="linux timestamp to e
 parser.add_argument("-i", "--incrementershortcut", type=int, help="limit range of increment")
 args = parser.parse_args()
 
-sample_size, threads, begin_timestamp, end_timestamp, incrementer_shortcut = 50000, 15, JAN_1_2018, TIME_NOW, 0
+sample_size, threads, begin_timestamp, end_timestamp, incrementer_shortcut = 50000, 15, JAN_1_2018, TIME_NOW, 10
 
 if args.samplesize is not None:
     sample_size = args.samplesize
