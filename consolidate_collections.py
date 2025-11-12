@@ -18,14 +18,23 @@ if args.incrementer_shortcut:
     unified_collection_folder += "-i"
 unified_collection_address = str(os.path.join(expanduser("~"), unified_collection_folder))
 
+os.makedirs(os.path.join(unified_collection_address, "metadata"), exist_ok=True)
+os.makedirs(os.path.join(unified_collection_address, "queries"), exist_ok=True)
+
 sampled_seconds = analyze_collection(collection)
 print("timestamp, # hits, estimated uploads/s, # private/deleted, estimated uploads/s (+deleted)")
 for sampled_second in sampled_seconds:
+    metadata_dir = os.path.join(unified_collection_address, "metadata")
+    if not os.path.isdir(metadata_dir):
+        continue  # skip if metadata dir is missing
     for hit in [hit for hit in sampled_second["hits"]
-        if os.path.isdir(os.path.join(unified_collection_address, "metadata")) and f"{hit}.json" not in os.listdir(os.path.join(unified_collection_address, "metadata"))]:
+        if f"{hit}.json" not in os.listdir(metadata_dir)
         shutil.copy(os.path.join(collection_address, "metadata", f"{hit}.json"),
                     os.path.join(unified_collection_address, "metadata", f"{hit}.json"))
-    with open(os.path.join(unified_collection_address, "queries", f"{sampled_second['timestamp']}.json"), "w") as f:
+    # Ensure queries folder exists before writing
+    queries_dir = os.path.join(unified_collection_address, "queries")
+    os.makedirs(queries_dir, exist_ok=True)
+    with open(os.path.join(queries_dir, f"{sampled_second['timestamp']}.json"), "w") as f:
         json.dump(sampled_second, f, indent=4)
     print(
         f"{sampled_second['timestamp']}, {len(sampled_second['hits'])}, {sampled_second['estimated_uploads_per_second']}, {len(sampled_second['other_messages'])}, {sampled_second['estimated_uploads_all']}")
