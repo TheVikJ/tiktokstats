@@ -26,11 +26,12 @@ print("timestamp, # hits, estimated uploads/s, # private/deleted, estimated uplo
 for sampled_second in sampled_seconds:
     metadata_dir = os.path.join(unified_collection_address, "metadata")
     if not os.path.isdir(metadata_dir):
-        continue  # skip if metadata dir is missing
-    for hit in [hit for hit in sampled_second["hits"]
-        if f"{hit}.json" not in os.listdir(metadata_dir)
-        shutil.copy(os.path.join(collection_address, "metadata", f"{hit}.json"),
-                    os.path.join(unified_collection_address, "metadata", f"{hit}.json"))
+        continue  # Skip if metadata dir is missing
+    for hit in [hit for hit in sampled_second["hits"] if f"{hit}.json" not in os.listdir(metadata_dir)]:
+        src = os.path.join(collection_address, "metadata", f"{hit}.json")
+        dst = os.path.join(metadata_dir, f"{hit}.json")
+        if os.path.exists(src):  # Skip if source file doesn't exist
+            shutil.copy(src, dst)
     # Ensure queries folder exists before writing
     queries_dir = os.path.join(unified_collection_address, "queries")
     os.makedirs(queries_dir, exist_ok=True)
