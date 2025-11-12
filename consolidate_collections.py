@@ -22,7 +22,7 @@ sampled_seconds = analyze_collection(collection)
 print("timestamp, # hits, estimated uploads/s, # private/deleted, estimated uploads/s (+deleted)")
 for sampled_second in sampled_seconds:
     for hit in [hit for hit in sampled_second["hits"]
-                if f"{hit}.json" not in os.listdir(os.path.join(unified_collection_address, "metadata"))]:
+        if os.path.isdir(os.path.join(unified_collection_address, "metadata")) and f"{hit}.json" not in os.listdir(os.path.join(unified_collection_address, "metadata"))]:
         shutil.copy(os.path.join(collection_address, "metadata", f"{hit}.json"),
                     os.path.join(unified_collection_address, "metadata", f"{hit}.json"))
     with open(os.path.join(unified_collection_address, "queries", f"{sampled_second['timestamp']}.json"), "w") as f:
