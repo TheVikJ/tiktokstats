@@ -18,8 +18,11 @@ if args.incrementer_shortcut:
     unified_collection_folder += "-i"
 unified_collection_address = str(os.path.join(expanduser("~"), unified_collection_folder))
 
-os.makedirs(os.path.join(unified_collection_address, "metadata"), exist_ok=True)
-os.makedirs(os.path.join(unified_collection_address, "queries"), exist_ok=True)
+# Always ensure target directories exist
+metadata_dir = os.path.join(unified_collection_address, "metadata")
+queries_dir = os.path.join(unified_collection_address, "queries")
+os.makedirs(metadata_dir, exist_ok=True)
+os.makedirs(queries_dir, exist_ok=True)
 
 sampled_seconds = analyze_collection(collection)
 print("timestamp, # hits, estimated uploads/s, # private/deleted, estimated uploads/s (+deleted)")
@@ -32,9 +35,7 @@ for sampled_second in sampled_seconds:
         dst = os.path.join(metadata_dir, f"{hit}.json")
         if os.path.exists(src):  # Skip if source file doesn't exist
             shutil.copy(src, dst)
-    # Ensure queries folder exists before writing
-    queries_dir = os.path.join(unified_collection_address, "queries")
-    os.makedirs(queries_dir, exist_ok=True)
+    # Write query summary safely
     with open(os.path.join(queries_dir, f"{sampled_second['timestamp']}.json"), "w") as f:
         json.dump(sampled_second, f, indent=4)
     print(
