@@ -1,45 +1,33 @@
-import sys
+import os
 import json
 import argparse
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from tqdm import tqdm
-import os
+from time import sleep
+from selenium import webdriver
+from datetime import datetime
+from selenium.webdriver.common.by import By
+from tiktoktools.metadata import extract_metadata
+from tiktoktools.time import generate_random_timestamp
+from tiktoktools.id import generate_ids_from_timestamp
+from selenium.webdriver.support.ui import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.support import expected_conditions
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from selenium.webdriver.chrome.service import Service as ChromeService
+from tiktoktools import ROOT_DIR, initialize_collection, JAN_1_2018, TIME_NOW
 
-original_argv = sys.argv[:]
-sanitized_argv = [original_argv[0]]
-skip_next = False
-for a in original_argv[1:]:
-    if skip_next:
-        skip_next = False
-        continue
-    if a == "-m" or a == "--minvideos" or a.startswith("--minvideos="):
-        if a == "-m" or a == "--minvideos":
-            skip_next = True
-        continue
-    sanitized_argv.append(a)
-sys.argv = sanitized_argv
-
-from randomsample import (
-    ROOT_DIR, initialize_collection, generate_random_timestamp,
-    generate_ids_from_timestamp, check_url,
-    JAN_1_2018, TIME_NOW
-)
-
-sys.argv = original_argv
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-s", "--samplesize", type=int)
-parser.add_argument("-t", "--threads", type=int)
-parser.add_argument("-b", "--begintimestamp", type=int)
-parser.add_argument("-e", "--endtimestamp", type=int)
-parser.add_argument("-i", "--incrementershortcut", type=int)
-parser.add_argument("-m", "--minvideos", type=int)
+parser.add_argument("-s", "--samplesize", type=int, help="number of IDs to sample per second")
+parser.add_argument("-t", "--threads", type=int, help="number of threads to use")
+parser.add_argument("-b", "--begintimestamp", type=int, help="linux timestamp to start sampling from")
+parser.add_argument("-e", "--endtimestamp", type=int, help="linux timestamp to end sampling at")
+parser.add_argument("-i", "--incrementershortcut", type=int, help="limit range of increment")
+parser.add_argument("-m", "--minvideos", type=int, help="minimum number of successful videos (statusCode == '0')")
 args = parser.parse_args()
 
-sample_size, threads = 50000, 15
-begin_timestamp, end_timestamp = JAN_1_2018, TIME_NOW
-incrementer_shortcut, min_videos = 10, 0
+sample_size, threads, begin_timestamp, end_timestamp, incrementer_shortcut, min_videos = 50000, 15, JAN_1_2018, TIME_NOW, 10, 0
 
 if args.samplesize is not None:
     sample_size = args.samplesize
@@ -53,58 +41,132 @@ if args.incrementershortcut is not None:
     if 0 < args.incrementershortcut < 2**6:
         incrementer_shortcut = args.incrementershortcut
     else:
-        raise ValueError("invalid incrementer limit")
+        raise ValueError(f"{args.incrementershortcut} is not a valid incrementer limit")
 if args.minvideos is not None:
     min_videos = args.minvideos
 
-collection = f"minrandom_tiktok_i_{incrementer_shortcut}_" + \
-             datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+collection = f"random_tiktok_"
+if incrementer_shortcut > 0:
+    collection += f"i_{incrementer_shortcut}_"
+collection += f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+
+thread_local = threading.local()
+
+
+def get_driver(reset_driver=False):
+    """
+    manage selenium webdriver instances for each running thread
+    :param reset_driver:
+    :return:
+    """
+    driver = getattr(thread_local, 'driver', None)
+    if reset_driver:
+        if driver is not None:
+            driver.quit()
+            sleep(5)
+        setattr(thread_local, 'driver', None)
+    if driver is None:
+        chrome_options = webdriver.ChromeOptions()
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--incognito")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        driver = webdriver.Chrome(options=chrome_options, service=ChromeService(ChromeDriverManager().install()))
+    setattr(thread_local, 'driver', driver)
+    return driver
+
+
+def check_url(url):
+    """
+    Check if url exists
+    :param url:
+    :return: dict: {"id": video id, "url": page url, "title": page title, "statusCode": status code in response,
+                    "statusMsg": status message in response}
+    """
+    video_id = url.split("/")[-1]
+    tries, reset_driver = 0, False
+    current_title, current_errormsg = "", ""
+    while tries < 4:
+        try:
+            driver = get_driver(reset_driver)
+            driver.get(url)
+            WebDriverWait(driver, 20).until(expected_conditions.presence_of_element_located((By.CSS_SELECTOR, "script#__UNIVERSAL_DATA_FOR_REHYDRATION__")))
+            # driver.implicitly_wait(5)  # wait up to 5 secs just in case things don't load immediately?
+            page_source, current_title, current_url = driver.page_source, driver.title, driver.current_url
+            if not current_title == "Access Denied":  # and ("s videos with | TikTok" not in current_title):
+                metadata_dict, current_statuscode, current_statusmsg = extract_metadata(page_source)
+                if ((current_url != url and current_statuscode != "0" and "https://www.tiktok.com/@/photo/" not in current_url)
+                        or current_statuscode == "100004" or current_statuscode == "10101" or current_statusmsg == "ErrSysPanic"):
+                    driver.quit()
+                    sleep(5)
+                    setattr(thread_local, 'driver', None)
+                else:
+                    if current_statuscode == "0":
+                        with open(os.path.join(ROOT_DIR, "collections", collection, "metadata", f"{video_id}.json"), "w") as f:
+                            json.dump(metadata_dict, f)
+                    return {
+                        "id": str(video_id),
+                        "url": current_url,
+                        "title": current_title,
+                        "statusCode": current_statuscode,
+                        "statusMsg": current_statusmsg
+                    }
+            else:
+                driver.quit()
+                sleep(5)
+                setattr(thread_local, 'driver', None)
+        except Exception as e:
+            current_errormsg = str(e)
+            if "Message: invalid session id" not in current_errormsg:  # "invalid session id" error is fixed with a driver reset
+                tqdm.write(f"{video_id} {current_errormsg}")
+            driver = getattr(thread_local, 'driver', None)
+            if driver is not None:
+                driver.quit()
+            setattr(thread_local, 'driver', None)
+            sleep(5)
+        finally:
+            tries += 1
+            reset_driver = True
+    tqdm.write(f"{video_id} returning none")
+    return {
+        "id": str(video_id),
+        "url": url,
+        "title": current_title,
+        "statusCode": "ERROR",
+        "statusMsg": current_errormsg
+    }
 
 
 def main():
     print(initialize_collection(collection))
     total_hits = 0
-
-    while min_videos == 0 or total_hits < min_videos:
-        random_timestamp = generate_random_timestamp(
-            start_timestamp=begin_timestamp,
-            end_timestamp=end_timestamp
-        )
-
-        ids = generate_ids_from_timestamp(
-            random_timestamp, n=sample_size,
-            limit_incrementer_randomness=incrementer_shortcut
-        )
-
+    while True:
+        random_timestamp = generate_random_timestamp(start_timestamp=begin_timestamp, end_timestamp=end_timestamp)
+        all_ids = generate_ids_from_timestamp(random_timestamp, n=sample_size, limit_incrementer_randomness=incrementer_shortcut)
         print(datetime.utcfromtimestamp(random_timestamp))
-
-        queries_dir = os.path.join(ROOT_DIR, "collections", collection, "queries")
-        os.makedirs(queries_dir, exist_ok=True)
-        with open(os.path.join(queries_dir, f"{random_timestamp}_queries.json"), "w") as f:
-            json.dump(ids, f)
-
-        results = []
-        with tqdm(total=len(ids)) as pbar:
+        with open(os.path.join(ROOT_DIR, "collections", collection, "queries", f"{random_timestamp}_queries.json"), "w") as f:
+            json.dump(all_ids, f)
+        with tqdm(total=len(all_ids)) as pbar:
             with ThreadPoolExecutor(max_workers=threads) as executor:
-                futures = [executor.submit(
-                    check_url,
-                    f"https://www.tiktok.com/@/video/{i}"
-                ) for i in ids]
-
+                results = []
+                futures = [executor.submit(check_url, f"https://www.tiktok.com/@/video/{generated_id}") for
+                           generated_id in all_ids]
                 for future in as_completed(futures):
-                    r = future.result()
-                    results.append(r)
-                    pbar.update(1)
-                    if r.get("statusCode") == "0":
+                    result = future.result()
+                    if result["statusCode"] == "0":
+                        tqdm.write(json.dumps(result))
+                        # tqdm.write("{:b}".format(int(result["id"])).zfill(64))
                         total_hits += 1
-                        tqdm.write(json.dumps(r))
+                    results.append(result)
+                    pbar.update(1)
                     if min_videos > 0 and total_hits >= min_videos:
                         break
-
-        with open(os.path.join(queries_dir, f"{random_timestamp}_hits.json"), "w") as f:
+        with open(os.path.join(ROOT_DIR, "collections", collection, "queries", f"{random_timestamp}_hits.json"), "w") as f:
             json.dump(results, f)
-
-    print(f"\nReached {total_hits} valid videos. Finished.")
+        if min_videos > 0 and total_hits >= min_videos:
+            break
 
 
 if __name__ == "__main__":
